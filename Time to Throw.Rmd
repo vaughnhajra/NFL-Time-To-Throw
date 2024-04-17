@@ -1,0 +1,558 @@
+---
+title: "Vaughn Hajra Final Project"
+author: "Vaughn Hajra"
+date: "2023-12-04"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(nsm3data)
+library(NSM3)
+library(mosaic)
+library(hrbrthemes)
+library(dbscan)
+```
+
+## Outline
+
+**Part 1: grouping based on residual (holding ball shorter/longer than expected)**
+
+Correlation -\>
+
+Simple Regression -\>
+
+multiple regression -\>
+
+group based on residual-\>
+
+test for any difference (with year as blocking factor) -\>
+
+-\> do (or discuss appropriateness of) multiple comparisons procedure
+
+**Step 2: Clustering, comparisons**
+
+Calculate and plot distance -\>
+
+```         
+kNNdist(x, k, all = FALSE, ...)
+
+kNNdistplot(x, k, minPts, ...)
+```
+
+Then run DBSCAN
+
+```         
+x <- as.matrix(iris[, 1:4])
+```
+
+```         
+db <- dbscan(x, eps = 0.4, minPts = 4)
+pairs(x, col = db$cluster + 1L)
+```
+
+Then do multiple comparisons (and use intuition to discuss groups and offensive style between clusters
+
+# Interesting Articles
+
+### Time to Throw
+
+<https://www.pff.com/news/nfl-the-perfect-timing-a-deeper-dive-into-time-to-throw-data>
+
+The above article details time to throw data. Relevant findings: Expected yards per play decreases after 3 seconds
+
+<https://www.stampedeblue.com/2021/10/16/22727432/fine-lets-talk-about-time-to-throw>
+
+The above article looks at time to throw and air yards attempted... Key finding: discrepencies are bad but long and long is okay
+
+### DBSCAN
+
+<https://towardsdatascience.com/how-dbscan-works-and-why-should-i-use-it-443b4a191c80>
+
+<https://www.youtube.com/watch?v=_A9Tq6mGtLI>
+
+## 
+
+## EDA/Data Wrangling
+
+```{r}
+Passing <- read.csv("~/Downloads/AWS - Passing.csv", stringsAsFactors=TRUE)
+Receiving <- read.csv("~/Downloads/AWS - Receiving.csv", stringsAsFactors=TRUE)
+
+nrow(Passing)
+nrow(Receiving)
+
+Passing$PlayerYr = paste(Passing$PLAYER,Passing$YEAR)
+Receiving$PlayerYr = paste(Receiving$PLAYER,Receiving$YEAR)
+
+Passing$TeamYr = paste(Passing$TEAM,Passing$YEAR)
+Receiving$TeamYr = paste(Receiving$TEAM,Receiving$YEAR)
+
+#head(Passing)
+#head(Receiving)
+
+ReceivingAvg <- Receiving %>%
+  group_by(TeamYr) %>%
+  mutate(teamTAR = sum(TAR)) %>%
+  ungroup()%>%
+  mutate(TARshare = TAR / teamTAR)%>%
+  group_by(TeamYr) %>%
+  summarize(CUSHavg = sum(CUSH*TARshare),
+            SEPavg = sum(SEP*TARshare),
+            TAYavg = sum(TAY*TARshare),
+            CTCHpct = sum(CTCH.*TARshare),
+            YEAR = min(YEAR))
+
+df <- merge(ReceivingAvg, Passing, by.x = "TeamYr", by.y = "TeamYr", all.y = T)
+
+head(df)
+
+nrow(df)
+
+favstats(df$RATE)
+favstats(df$TT)
+favstats(df$ATT)
+favstats(df$TD)
+favstats(df$INT)
+favstats(df$SEPavg)
+favstats(df$CUSHavg)
+```
+
+Now let's take an attempt at visualizing some of this data!
+
+```{r}
+ggplot(df, aes(x=IAY, y=TT, color = RATE)) +
+    geom_point() +
+    scale_color_gradient(low="red2", high="green2", name = "QBR") + 
+    geom_lm(color = "grey") +
+    theme_minimal() +
+    ylab("Time to Throw (Seconds)") +
+    xlab("Average Intended Air Yards") + 
+    ggtitle("Time to Throw vs Air Yards in the NFL (2018-2022)") +
+    labs(caption = "Data Source: AWS")
+```
+
+Use median or mean to split up groups??
+
+### Correlation
+
+```{r}
+cor.test(df$TT, df$IAY, method = "kendall", alt = "greater")
+
+with(df, kendall.ci(TT, IAY, alpha = 0.05, type = "t"))
+
+cor.test(df$TT, df$IAY, method = "pearson", alt = "greater")
+cor.test(df$TT, df$IAY, method = "pearson", alt = "t") #Used for confidence interval
+
+
+
+```
+
+### Kruskal-Wallace & ANOVA
+
+```{r}
+favstats(df$TT)
+favstats(df$IAY)
+
+#Getting counts
+longSlow <- sum(df$TT > 2.77 & df$IAY > 7.9, na.rm = TRUE)
+longSlow
+
+shortSlow <- sum(df$TT > 2.77 & df$IAY <= 7.9, na.rm = TRUE)
+shortSlow
+
+longQuick <- sum(df$TT <= 2.77 & df$IAY > 7.9, na.rm = TRUE)
+longQuick
+
+shortQuick <- sum(df$TT <= 2.77 & df$IAY <= 7.9, na.rm = TRUE)
+shortQuick
+
+# Calculate medians
+median_IAY <- median(df$IAY, na.rm = TRUE)
+median_TT <- median(df$TT, na.rm = TRUE)
+
+# Classify as Short/Long and Slow/Quick based on medians
+df$medianDist <- ifelse(df$IAY <= median_IAY, "Short", "Long")
+df$medianTime <- ifelse(df$TT <= median_TT, "Quick", "Slow")
+
+# Create a combined column
+df$medianDistTime <- paste(df$medianDist, df$medianTime)
+
+
+
+# Run ANOVA
+anova_result <- aov(RATE ~ medianDistTime, data = df)
+summary(anova_result)
+
+
+
+plot(anova_result)
+
+# Perform Kruskal-Wallis test
+kruskal_result <- kruskal.test(RATE ~ medianDistTime, data = df)
+kruskal_result
+
+```
+
+### Simple Linear Regression
+
+```{r}
+simpleModel <- lm(TT ~ IAY, data = df)
+msummary(simpleModel)
+plot(simpleModel)
+
+#with(df, theil(x = IAY, y = TT,type = "t"))#Not working???
+
+f.01 <- rfit(TT ~ IAY, data = df)
+summary(f.01)
+#plot(f.01)
+```
+
+Idea: Taking Longer to throw with lower air yards per target leads to expected worse QBR, so lets create groups based on that
+
+### Multiple Linear Regression
+
+Now let's do multiple linear regression:
+
+```{r}
+#head(df)
+ParametricModel <- lm(TT ~ IAY + CUSHavg + SEPavg + ATT + CAY + as.factor(YEAR.x), data = df)
+msummary(ParametricModel)
+plot(simpleModel)
+
+#with(df, theil(x = IAY, y = TT,type = "t"))#Not working???
+
+f.01 <- rfit(TT ~ IAY + CUSHavg + SEPavg + ATT + CAY + as.factor(YEAR.x), data = df)
+summary(f.01)
+
+r.01 <- rfit(TT ~ IAY + SEPavg + ATT + CAY + as.factor(YEAR.x), data = df)
+r.02 <- rfit(TT ~ IAY + SEPavg + ATT + CAY, data = df)
+r.03 <- rfit(TT ~ IAY + SEPavg + ATT, data = df)
+
+r.04 <- rfit(TT ~ IAY  + SEPavg + ATT + CAY+ as.factor(YEAR.x), data = df)
+drop.test(f.01, r.04)
+
+
+drop.test(f.01, r.01)
+drop.test(f.01, r.02)
+drop.test(f.01, r.03)
+
+
+r.042 <- rfit(TT ~ IAY  + SEPavg + ATT , data = df)
+plot(r.042)
+
+summary(r.03)
+
+
+library(MASS)
+
+# Assuming df is your dataframe and it contains the columns TT, IAY, SEPavg, and ATT
+# df <- read.csv("your_data.csv") # Load your data frame
+
+# Fit a robust linear model
+r.042 <- rlm(TT ~ IAY + SEPavg + ATT, data = df)
+
+# Create a Q-Q plot for the residuals
+dev.new()
+qqnorm(residuals(r.042))
+qqline(residuals(r.042), col = "red")
+```
+
+### Calculating Residuals!
+
+\
+Now let's save predicted value, compare to residual, and see if there are differences!
+
+```{r}
+df$predicted_value <- 1.6630e+00 + (7.3861e-02 * df$IAY) + (1.9794e-01 * df$SEPavg) + (-1.4743e-04 * df$ATT)
+
+df$residual = df$TT - df$predicted_value
+
+# Create a new column with "OVER" and "UNDER" based on the residual
+df$over_under <- ifelse(df$residual > 0, "Slow", "Quick")
+
+# Count the number of "OVER" and "UNDER" occurrences
+counts <- table(df$over_under)
+
+# You can then view the counts
+print(counts)
+```
+
+### Location Shift Between Groups
+
+Next, let's do a t-test to tell if there is a difference between the groups
+
+```{r}
+t.test(RATE ~ over_under, data = df, alternative = "greater") #parametric approach
+
+wilcox.test(RATE ~ over_under, data = df, alternative = "greater") #nonparametric approach
+
+```
+
+### Difference in Dispersion Between Groups
+
+Finally, let's do a miller-jacknife procedure to test for dispersion!
+
+```{r}
+
+var.test(slow, quick)
+JackKnifeManual <- function( X, Y, alpha = 0.05){
+  m <- length(X)
+  n <- length(Y)
+  S0 <- log(var(X))
+  T0 <- log(var(Y))
+  
+  Xi <- c()
+  Di <- c()
+  Yj <- c()
+  Ej <- c()
+  Ai <- c()
+  Bj <- c()
+  Si <- c()
+  Tj <- c()
+  
+  for( i in 1:m){
+    Xi <- cbind(Xi,mean(X[-i]))
+    Di <- cbind(Di, var(X[-i]))
+    Si <- cbind(Si,log(Di[i]))
+    Ai <- c(Ai, m*S0-(m-1)*Si[i])
+  }
+
+  for( i in 1:n){
+    Yj <- cbind(Yj,mean(Y[-i]))
+    Ej <- cbind(Ej, var(Y[-i]))
+    Tj <- cbind(Tj,log(Ej[i]))
+    Bj <- c(Bj, n*T0-(n-1)*Tj[i])
+  }
+  
+  Abar <- mean(Ai)
+  Bbar <- mean(Bj)
+  V1 <- sum((Ai -Abar)^2)/(m*(m-1))
+  V2 <- sum((Bj -Bbar)^2)/(n*(n-1))
+  
+  Q <- (Abar-Bbar)/sqrt(V1+V2)
+  z <- -qnorm(alpha/2)
+  l <- exp(Abar-Bbar-z*(V1+V2)^{1/2})
+  u <- exp(Abar-Bbar+z*(V1+V2)^{1/2})
+  cat("The Jackknife estimator is: ", exp(Abar-Bbar), "\n")
+  cat("The ", (1-alpha)*100, "% confidence level is: (",l,",",u,")\n")
+  
+  z<- -qnorm(alpha)
+  lbound <- exp(Abar-Bbar-z*(V1+V2)^{1/2})
+  ubound <- exp(Abar-Bbar+z*(V1+V2)^{1/2})
+  cat("The ", (1-alpha)*100, "% lower confidence bound is: (",lbound,", inf)\n")
+  cat("The ", (1-alpha)*100, "% upper confidence bound is: (0,",ubound,")\n")
+  
+  result <- list(Q = Q, Abar = Abar, Bbar = Bbar, V1 = V1, V2 = V2, 
+                 Bj = Bj, Tj = Tj, Ej = Ej, Yj = Yj,
+                 Xi = Xi, Di = Di, Si = Si, Ai = Ai, 
+                 S0 = S0, T0 = T0, l=l, u=u, lbound = lbound, ubound = ubound)
+  #return(result)
+    
+}
+
+
+# Create an empty vector
+slow <- c()
+quick <- c()
+
+# Loop through each row in the dataframe
+for (i in 1:nrow(df)) {
+  # Check if over_under is "Slow" for this row
+  if (df$over_under[i] == "Slow") {
+    # Add the value from a specific column to the vector
+    # Replace 'your_column_name' with the name of the column you're interested in
+    slow <- c(slow, df$RATE[i])
+  }
+  # Check if over_under is "Quick" for this row
+  if (df$over_under[i] == "Quick") {
+    # Add the value from a specific column to the vector
+    # Replace 'your_column_name' with the name of the column you're interested in
+    quick <- c(quick, df$RATE[i])
+  }
+}
+
+JackKnifeManual(slow, quick, 0.05)
+teststat <- MillerJack(slow, quick)#teststat
+teststat
+2*pnorm(teststat, lower.tail = FALSE)
+```
+
+### Dist Plot
+
+```{r}
+# Density plots with semi-transparent fill
+ggplot(df, aes(x=RATE, fill=over_under)) + geom_density(alpha=.3) +
+    ylab("Density") +
+    xlab("Quarterback Rating (QBR)") + 
+    ggtitle("Distribution of QBR for Quick vs Slow Passers (2018-2022)") +
+    labs(caption = "Data Source: AWS") + 
+    theme_minimal() + labs(fill = "QB Classification")
+```
+
+### Boxplots
+
+```{r}
+df %>%
+  ggplot( aes(x=over_under, y=RATE, fill = over_under)) +
+    geom_boxplot()+
+    theme_minimal() +
+    ylab("Quaterback Rating (QBR)") +
+    xlab("Quick vs Slow Time to Throw") + 
+    ggtitle("Time to Throw vs Quarterback Rating (2018-2022)") +
+    labs(caption = "Data Source: AWS") +
+    theme(legend.position = "none") #+
+    #geom_jitter(color="black", size=0.4, alpha = 0.4)
+
+
+```
+
+## Part 2 - Clustering and Comparisons
+
+### Prepping data (as matrix)
+
+```{r}
+dfCluster <- df %>% select(PlayerYr, ATT, YDS, TD, INT, SEPavg, TAYavg)
+head(dfCluster)
+x <- as.matrix(dfCluster[, 2:7])
+favstats(x)
+```
+
+### K-Distance / Nearest Neighbor Plot
+
+```{r}
+
+k = 14
+minPts = 10
+kNNdist(x, k, all = FALSE)
+
+kNNdistplot(x, k, minPts)
+
+
+```
+
+### Running Clustering
+
+```{r}
+db <- dbscan(x, eps = 150, minPts = 10)
+db
+
+pairs(x, col = db$cluster + 1L)
+
+
+opt <- optics(x, eps = 150, minPts = 10)
+opt
+opt <- extractDBSCAN(opt, eps_cl = 150)
+plot(opt)
+```
+
+### Adding Clusters to Dataframe / Displaying Groups
+
+```{r}
+# Extract cluster labels
+cluster_assignments <- db$cluster
+
+# Add cluster assignments to dfCluster as a new column
+dfCluster$Cluster <- cluster_assignments
+df$Cluster <- cluster_assignments
+
+
+# Filter out players in cluster 0 and create a table with only PlayerYr and Cluster
+final_table <- dfCluster %>% 
+               filter(Cluster != 0) %>%
+               select(PlayerYr, Cluster)
+
+# View the table
+print(final_table)
+
+# Add a unique identifier within each cluster
+df2 <- final_table %>% group_by(Cluster) %>% mutate(RowID = row_number())
+
+# Spread the data into columns
+df_spread <- df2 %>% spread(Cluster, PlayerYr)
+
+# View the transformed data
+print(df_spread)
+
+
+
+```
+
+Now let's look at quarterback rating for the four groups
+
+```{r}
+df %>%
+  ggplot( aes(x=as.factor(Cluster), y=RATE, fill = as.factor(Cluster))) +
+    geom_boxplot()+
+    theme_minimal()+
+    ylab("Quaterback Rating (QBR)") +
+    xlab("Cluster Group") + 
+    ggtitle("QBR by Group for NFL Quarterbacks (2018-2022)") +
+    labs(caption = "Data Source: AWS")+
+    theme(legend.position = "none")
+
+df %>%
+  ggplot( aes(x=as.factor(Cluster), y=TT, fill = as.factor(Cluster))) +
+    geom_boxplot()+
+    theme_minimal()+
+    ylab("Time to Throw (TT)") +
+    xlab("Cluster Group") + 
+    ggtitle("TT by Group for NFL Quarterbacks (2018-2022)") +
+    labs(caption = "Data Source: AWS")+
+    theme(legend.position = "none")
+```
+
+```{r}
+
+dfClusters <- df %>%
+  filter(Cluster != 0)
+
+# Run ANOVA
+anova_result1 <- aov(RATE ~ as.factor(Cluster), data = dfClusters)
+summary(anova_result1)
+# Perform Kruskal-Wallis test
+kruskal_result1 <- kruskal.test(RATE ~ as.factor(Cluster), data = dfClusters)
+kruskal_result1
+
+kruskal_result2 <- kruskal.test(TT ~ as.factor(Cluster), data = df)
+kruskal_result
+
+
+#pJCK(dfClusters$RATE, g = as.factor(dfClusters$Cluster))
+rateVector1 <- dfClusters[dfClusters$Cluster == 1, "RATE"]
+rateVector2 <- dfClusters[dfClusters$Cluster == 2, "RATE"]
+rateVector3 <- dfClusters[dfClusters$Cluster == 3, "RATE"]
+rateVector4 <- dfClusters[dfClusters$Cluster == 4, "RATE"]
+
+QBR.vectors <- list(group3 = rateVector3, group4 = rateVector4, group1 = rateVector1, group2 = rateVector2)
+
+pJCK(QBR.vectors)
+
+
+#TIme to throw
+# Run ANOVA
+anova_result1 <- aov(TT ~ as.factor(Cluster), data = dfClusters)
+summary(anova_result1)
+
+# Perform Kruskal-Wallis test
+kruskal_result1 <- kruskal.test(TT ~ as.factor(Cluster), data = dfClusters)
+kruskal_result1
+```
+
+s
+
+# Questions for Office Hours
+
+-   Slow/Short, Slow/Long, Quick/Short, Quick/Long
+
+    -   DON'T use regression for this?
+
+    -   Parametric Ordered alternatives
+
+-   Some sort of validation with current data? Specific example?
+
+Next Steps
+
+-   Ordered Alternatives
+
+-   MLR Residual plot and double check
